@@ -1,6 +1,9 @@
 package gitclient
 
-import "github.com/libgit2/git2go"
+import (
+	"github.com/libgit2/git2go"
+	"github.com/pkg/errors"
+)
 
 func updateSubmoduleRecursive(sub *git.Submodule, name string) int {
 	if err := sub.Update(true, nil); err != nil {
@@ -23,7 +26,7 @@ func updateSubmoduleRecursive(sub *git.Submodule, name string) int {
 func (gc *GitClient) Clone(url, path string) error {
 	repo, err := git.Clone(url, path, &git.CloneOptions{})
 	if err != nil {
-		return err
+		return errors.Wrap(err, "clone failed")
 	}
 	defer repo.Free()
 

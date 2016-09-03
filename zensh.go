@@ -1,18 +1,18 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os/user"
 	"sync"
 
+	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 
-	"github.com/google/go-github/github"
-
-	"./gitclient"
-	"./github_release"
-	"./progress"
-	"./util"
+	"github.com/philopon/zensh/gitclient"
+	"github.com/philopon/zensh/github_release"
+	"github.com/philopon/zensh/progress"
+	"github.com/philopon/zensh/util"
 )
 
 type Zensh struct {
@@ -23,10 +23,10 @@ type Zensh struct {
 	HomeDir      string
 }
 
-func NewZensh(config *Config) (Zensh, error) {
+func NewZensh(config *Config) (*Zensh, error) {
 	user, err := user.Current()
 	if err != nil {
-		return Zensh{}, err
+		return nil, err
 	}
 
 	var ghTc *http.Client
@@ -39,7 +39,7 @@ func NewZensh(config *Config) (Zensh, error) {
 		)
 	}
 
-	zensh := Zensh{
+	zensh := &Zensh{
 		Config:       &config.GlobalConfig,
 		Plugins:      config.Plugins,
 		GitClient:    gitclient.NewGitClient(),
@@ -48,7 +48,7 @@ func NewZensh(config *Config) (Zensh, error) {
 	}
 
 	for i := 0; i < len(config.Plugins); i++ {
-		config.Plugins[i].parent = &zensh
+		config.Plugins[i].parent = zensh
 	}
 
 	return zensh, nil
@@ -58,18 +58,24 @@ func (z *Zensh) NewSemaphore() util.Semaphore {
 	return util.NewSemaphore(z.Config.Threads)
 }
 
-type Failed struct {
-	Recipe  *Recipe
-	Occured error
+type RecipeError struct {
+	Recipe *Recipe
+	Error  error
 }
 
-func (z *Zensh) Install() []Failed {
+type ActionError []RecipeError
+
+func (ae ActionError) Error() string {
+	return fmt.Sprintf("%v errors occured", len(ae))
+}
+
+func (z *Zensh) Install() error {
 	prog := progress.NewProgress()
 	defer prog.Free()
 	sem := z.NewSemaphore()
 	wait := sync.WaitGroup{}
 
-	errors := make(chan Failed, len(z.Plugins))
+	errors := make(chan RecipeError, len(z.Plugins))
 
 	for _, recipe := range z.Plugins {
 		if recipe.Source == Local {
@@ -91,7 +97,7 @@ func (z *Zensh) Install() []Failed {
 
 			if err := recipe.Install(); err != nil {
 				recipe.task.Done("Error: " + err.Error())
-				errors <- Failed{Recipe: recipe, Occured: err}
+				errors <- RecipeError{Recipe: recipe, Error: err}
 			}
 			recipe.task.Done("done!")
 		}(recipe)
@@ -100,11 +106,26 @@ func (z *Zensh) Install() []Failed {
 	wait.Wait()
 
 	errSize := len(errors)
-	errList := make([]Failed, errSize)
+	if errSize == 0 {
+		return nil
+	}
+
+	errList := make([]RecipeError, errSize)
 
 	for i := 0; i < errSize; i++ {
 		errList[i] = <-errors
 	}
 
-	return errList
+	return ActionError(errList)
+}
+
+func (z *Zensh) CheckUpdate() ([]fmt.Stringer, error) {
+	prog := progress.NewProgress()
+	defer prog.Free()
+	sem := z.NewSemaphore()
+	wait := sync.WaitGroup{}
+
+	fmt.Println(sem, wait)
+
+	return []fmt.Stringer{}, nil
 }

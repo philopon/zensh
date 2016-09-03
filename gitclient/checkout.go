@@ -1,6 +1,6 @@
 package gitclient
 
-import "github.com/libgit2/git2go"
+import git "github.com/libgit2/git2go"
 
 func (repo *Repo) lookupCommitByRef(refStr string) *git.Commit {
 	ref, err := repo.References.Lookup(refStr)
@@ -45,8 +45,6 @@ func (repo *Repo) getCommit(target string) (*git.Commit, string, error) {
 }
 
 func (repo *Repo) Checkout(target string) error {
-	repo.gitStash("zensh checkout")
-
 	cmt, branchName, err := repo.getCommit(target)
 	if err != nil {
 		return err

@@ -3,8 +3,6 @@ package gitclient
 import "github.com/libgit2/git2go"
 
 func (repo *Repo) GitUpdate() error {
-	repo.gitStash("zensh update")
-
 	remote, err := repo.Remotes.Lookup("origin")
 	if err != nil {
 		return err
