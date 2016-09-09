@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -28,10 +29,10 @@ func (z *Zensh) InfoCommand() int {
 		green.Printf("%6v ", recipe.Source.String())
 
 		hash, err := recipe.GetHash()
-		if err != nil {
-			red.Println("[Error]", err)
-		} else if recipe.Source == Local {
+		if err == NoHashError {
 			ansi.Println("ok")
+		} else if err != nil {
+			red.Println("[Error]", err)
 		} else if oid, ok := hash.AsOid(); ok {
 			ansi.Println(oid.String()[:7])
 		} else {
@@ -85,6 +86,36 @@ func (z *Zensh) InstallCommand(ask bool) int {
 	}
 }
 
+func (z *Zensh) OutdatedCommand(fetch bool) int {
+	updates := make([]*Recipe, 0)
+
+	for _, recipe := range z.Plugins {
+		hasUpdate, err := recipe.HasUpdate(fetch)
+
+		if err == NoInfoError {
+			logrus.WithField("repo", recipe.Repo).Error(err)
+			continue
+		}
+
+		if err != nil {
+			logrus.WithField("repo", recipe.Repo).Error(err)
+			continue
+		}
+
+		if !hasUpdate {
+			continue
+		}
+
+		updates = append(updates, recipe)
+	}
+
+	for _, recipe := range updates {
+		fmt.Println(recipe.Source, recipe.Repo)
+	}
+
+	return 0
+}
+
 func main() {
 	color.Output = ansi.NewAnsiStdout()
 
@@ -98,5 +129,7 @@ func main() {
 		panic(err)
 	}
 
-	os.Exit(zensh.InstallCommand(false))
+	os.Exit(zensh.OutdatedCommand(false))
+	// os.Exit(zensh.InfoCommand())
+	// os.Exit(zensh.InstallCommand(false))
 }

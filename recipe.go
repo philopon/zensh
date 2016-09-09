@@ -2,14 +2,16 @@ package main
 
 import (
 	"bufio"
+	"container/list"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	git "github.com/libgit2/git2go"
+	"github.com/philopon/gogit"
 	"github.com/philopon/zensh/github_release"
 	"github.com/philopon/zensh/util"
 )
@@ -42,11 +44,22 @@ func (r *Recipe) IsInstalled() bool {
 }
 
 func (r *Recipe) installGithub() error {
-	r.task.Update("cloning...")
-	return r.parent.GitClient.Clone(
-		"https://github.com/"+r.Repo+".git",
-		r.Directory(),
-	)
+	r.task.Update("cloning ...")
+
+	url := "https://github.com/" + r.Repo + ".git"
+
+	if err := r.parent.GitClient.Clone(url, r.Directory()); err != nil {
+		return err
+	}
+
+	if r.Version != "" {
+		r.task.Update(fmt.Sprintf("checkout %v ...", r.Version))
+		if err := r.parent.GitClient.Checkout(r.Directory(), r.Version); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (r *Recipe) installGithubRelease() error {
@@ -59,7 +72,7 @@ func (r *Recipe) installGithubRelease() error {
 	}
 
 	r.task.Update("fetching release information ...")
-	asset, err := r.parent.GithubClient.Fetch(owner, repo, "")
+	asset, err := r.parent.GithubClient.Fetch(owner, repo, r.Version)
 	if err != nil {
 		return err
 	}
@@ -107,7 +120,7 @@ func (r *Recipe) Install() error {
 
 type Hash interface {
 	fmt.Stringer
-	AsOid() (*git.Oid, bool)
+	AsOid() (*gogit.Oid, bool)
 	AsInt() (int, bool)
 }
 
@@ -121,36 +134,22 @@ func (i intHash) AsInt() (int, bool) {
 	return int(i), true
 }
 
-func (i intHash) AsOid() (*git.Oid, bool) {
+func (i intHash) AsOid() (*gogit.Oid, bool) {
 	return nil, false
 }
 
-type oidHash git.Oid
+type oidHash gogit.Oid
 
 func (o *oidHash) String() string {
-	return (*git.Oid)(o).String()
+	return (*gogit.Oid)(o).String()
 }
 
 func (o *oidHash) AsInt() (int, bool) {
 	return 0, false
 }
 
-func (o *oidHash) AsOid() (*git.Oid, bool) {
-	return (*git.Oid)(o), true
-}
-
-type noHash int
-
-func (n noHash) String() string {
-	return ""
-}
-
-func (o noHash) AsInt() (int, bool) {
-	return 0, false
-}
-
-func (o noHash) AsOid() (*git.Oid, bool) {
-	return nil, false
+func (o *oidHash) AsOid() (*gogit.Oid, bool) {
+	return (*gogit.Oid)(o), true
 }
 
 func (r *Recipe) getHashGithubRelease() (intHash, error) {
@@ -169,21 +168,25 @@ func (r *Recipe) getHashGithubRelease() (intHash, error) {
 	return intHash(asset.ID), nil
 }
 
-func (r *Recipe) getHashGit() (*oidHash, error) {
-	repo, err := r.parent.GitClient.OpenRepository(r.Directory())
-	if err != nil {
-		return nil, err
-	}
-	defer repo.Free()
+func (r *Recipe) openGitRepository() (*gogit.Repository, error) {
+	return gogit.OpenRepository(filepath.Join(r.Directory(), ".git"))
+}
 
-	head, err := repo.Head()
+func (r *Recipe) getHashGit() (*oidHash, error) {
+	repo, err := r.openGitRepository()
 	if err != nil {
 		return nil, err
 	}
-	defer head.Free()
+
+	head, err := repo.LookupReference("HEAD")
+	if err != nil {
+		return nil, err
+	}
 
 	return (*oidHash)(head.Target()), nil
 }
+
+var NoHashError = errors.New("no hash")
 
 func (r *Recipe) GetHash() (Hash, error) {
 	if !r.IsInstalled() {
@@ -198,9 +201,104 @@ func (r *Recipe) GetHash() (Hash, error) {
 		return r.getHashGithubRelease()
 	case Github:
 		return r.getHashGit()
-	case Local:
-		return noHash(0), nil
 	}
 
-	return intHash(0), nil
+	return nil, NoHashError
+}
+
+var DepthLimitError = errors.New("no commit history")
+var NoHistoryError = errors.New("no commit history")
+
+func commitsBetween(new, old *gogit.Commit, limit int) ([]*gogit.Commit, error) {
+	oldId := *old.Id()
+	newId := *new.Id()
+
+	if newId == oldId {
+		return []*gogit.Commit{}, nil
+	}
+
+	stack := list.New()
+	vis := make(map[gogit.Oid]*gogit.Commit)
+
+	vis[newId] = nil
+	stack.PushFront(new)
+	depth := 0
+
+	for stack.Len() > 0 {
+		if limit != 0 && depth > limit {
+			return nil, DepthLimitError
+		}
+
+		element := stack.Back()
+		stack.Remove(element)
+		v := element.Value.(*gogit.Commit)
+		vId := *v.Id()
+
+		if vId == oldId {
+			cur := vis[oldId]
+			commits := []*gogit.Commit{cur}
+
+			for {
+				cur = vis[*cur.Id()]
+				if cur == nil {
+					break
+				}
+				commits = append(commits, cur)
+			}
+
+			return commits, nil
+		}
+
+		for i := 0; i < v.ParentCount(); i++ {
+			u := v.Parent(i)
+			uId := *u.Id()
+
+			if _, visited := vis[uId]; !visited {
+				vis[uId] = v
+				stack.PushFront(u)
+			}
+		}
+
+		depth += 1
+	}
+
+	return []*gogit.Commit{}, NoHistoryError
+}
+
+func (r *Recipe) gitHasUpdate(fetch bool) (bool, error) {
+	if fetch {
+		if err := r.parent.GitClient.Fetch(r.Directory()); err != nil {
+			return false, err
+		}
+	}
+
+	repo, err := r.openGitRepository()
+	if err != nil {
+		return false, err
+	}
+
+	newRef, err := repo.LookupReference("FETCH_HEAD")
+	if err != nil {
+		return false, err
+	}
+
+	curRef, err := repo.LookupReference("HEAD")
+	if err != nil {
+		return false, err
+	}
+
+	return *newRef.Target() != *curRef.Target(), nil
+}
+
+var NoInfoError = errors.New("no info")
+
+func (r *Recipe) HasUpdate(fetch bool) (bool, error) {
+	switch r.Source {
+	case Github:
+		return r.gitHasUpdate(fetch)
+	case Local:
+		return false, nil
+	}
+
+	return false, NoInfoError
 }

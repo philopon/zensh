@@ -104,6 +104,7 @@ type Recipe struct {
 	Hook       Hook
 	Condition  Condition  `toml:"on"`
 	PluginType PluginType `toml:"as"`
+	Version    string
 
 	// plugin only
 	AfterCompinit bool `toml:"after_compinit"`
@@ -125,10 +126,17 @@ type GithubConfig struct {
 	Token string
 }
 
+type GitConfig struct {
+	Command string
+	Depth   int
+	Limit   int
+}
+
 type GlobalConfig struct {
 	Threads     int
 	Directories DirectoryConfig
 	Github      GithubConfig
+	Git         GitConfig
 }
 
 type Config struct {
@@ -143,6 +151,10 @@ func LoadConfig(path string) (*Config, error) {
 			Directories: DirectoryConfig{
 				Repo:  "~/.zensh",
 				Local: "~/.zensh/local",
+			},
+			Git: GitConfig{
+				Command: "git",
+				Limit:   100,
 			},
 		},
 	}

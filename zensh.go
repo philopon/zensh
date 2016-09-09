@@ -9,7 +9,7 @@ import (
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 
-	"github.com/philopon/zensh/gitclient"
+	"github.com/philopon/zensh/git"
 	"github.com/philopon/zensh/github_release"
 	"github.com/philopon/zensh/progress"
 	"github.com/philopon/zensh/util"
@@ -18,8 +18,8 @@ import (
 type Zensh struct {
 	Config       *GlobalConfig
 	Plugins      []*Recipe
-	GitClient    gitclient.GitClient
 	GithubClient *github_release.Client
+	GitClient    *git.Git
 	HomeDir      string
 }
 
@@ -39,11 +39,13 @@ func NewZensh(config *Config) (*Zensh, error) {
 		)
 	}
 
+	gitConfig := config.GlobalConfig.Git
+
 	zensh := &Zensh{
 		Config:       &config.GlobalConfig,
 		Plugins:      config.Plugins,
-		GitClient:    gitclient.NewGitClient(),
 		GithubClient: (*github_release.Client)(github.NewClient(ghTc)),
+		GitClient:    &git.Git{Command: gitConfig.Command, Depth: gitConfig.Depth},
 		HomeDir:      user.HomeDir,
 	}
 
@@ -117,15 +119,4 @@ func (z *Zensh) Install() error {
 	}
 
 	return ActionError(errList)
-}
-
-func (z *Zensh) CheckUpdate() ([]fmt.Stringer, error) {
-	prog := progress.NewProgress()
-	defer prog.Free()
-	sem := z.NewSemaphore()
-	wait := sync.WaitGroup{}
-
-	fmt.Println(sem, wait)
-
-	return []fmt.Stringer{}, nil
 }

@@ -1,6 +1,6 @@
 package progress
 
-import "github.com/k0kubun/go-ansi"
+import ansi "github.com/k0kubun/go-ansi"
 
 // Term Manager
 type TermManager struct {
